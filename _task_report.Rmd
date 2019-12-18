@@ -1,0 +1,151 @@
+---
+params:
+  task: ""
+title: "`r params$task`"
+output: github_document
+---
+
+```{r include = FALSE}
+knitr::opts_chunk$set(echo = FALSE, out.width = "100%")
+
+# Libraries
+library(tidyverse)
+library(googlesheets)
+library(yaml)
+
+# Parameters
+  # Anonymize number
+anon_number <- 1
+  # URL to personal repo
+url_personal <- "https://github.com/dcl-test-06/situate"
+  # URL to task repo
+url_tasks <- "https://github.com/dcl-test-06/tasks"
+  # Spreadsheet key for feedback
+key_feedback <- "1ncg3Oh6SosyYgEQWoAwAgB0yas-OFId_H__vCybPUyI"
+  # Spreadsheet key for bugs
+key_bugs <- "1Ee1YXf7dmq4ESSS6gfsPZSABZbR8-yq3BUQj_GvfWT8"
+  # Spreadsheet key for notes data
+key_notes <- "TEST_KEY"
+  # File with task codes
+file_task_codes <- "../data/utility/task_codes.yml"
+
+# Functions
+  # Convert character vector to ordered factor in numeric order
+numeric_order <- function(x) {
+  factor(x, levels = unique(x) %>% str_sort(numeric = TRUE))
+}
+
+#===============================================================================
+
+# Read in task codes and create parts of URLs
+task_codes <- read_yaml(file_task_codes)
+stopifnot(str_to_lower(params$task) %in% names(task_codes))
+code_task <- 
+  str_glue(
+    "{str_to_lower(params$task)}-{task_codes[[{str_to_lower(params$task)}]]}"
+  )
+
+# Give googlesheets permission to access spreadsheets
+gs_auth()
+
+# Read in feedback
+feedback <- 
+  gs_key(key_feedback) %>% 
+  gs_read(
+    ws = str_to_upper(params$task),
+    col_types = cols(.default = col_double())
+  ) %>% 
+  gather(key = key, value = score, -number)
+
+# Read in notes
+notes <- 
+  gs_key(key_notes) %>%
+  gs_read(ws = "Notes") 
+
+# Read in bugs
+df <- 
+  gs_key(key_bugs) %>%
+  gs_read(
+    ws = str_to_upper(params$task),
+    col_types = cols(.default = col_character()),
+    trim_ws = TRUE
+  )
+bugs <- 
+  df %>% 
+  filter(number == anon_number) %>% 
+  select(-number, -starts_with("X")) %>% 
+  gather(key = question, value = code, na.rm = TRUE)
+if (nrow(bugs) > 0) {
+  bugs <- 
+    bugs %>% 
+    separate_rows(code, sep = "\\s*[, ]\\s*") %>%
+    mutate_all(str_trim)
+}
+comments <- 
+  df %>% 
+  select_at(vars(1:4)) %>% 
+  set_names(nm = c("name", "code", "value", "comment")) %>% 
+  filter(is.na(name), !is.na(code)) %>% 
+  select(-name)
+
+# Combine feedback and bugs
+feedback_bugs <- 
+  feedback %>% 
+  filter(number == anon_number) %>% 
+  select(unit = key, score) %>% 
+  left_join(bugs, by = c("unit" = "question")) %>% 
+  left_join(comments, by = "code") %>% 
+  mutate_at(vars(unit), ~ numeric_order(.) %>% fct_relevel("total")) %>% 
+  mutate_at(vars(-unit), replace_na, replace = "") %>%
+  arrange(unit, numeric_order(code))
+```
+
+## Solutions
+
+* [Your solution](`r str_glue("{url_personal}/blob/master/{code_task}/{code_task}.md")`)
+* [DCL solution](`r str_glue("{url_tasks}/blob/master/{code_task}/solution.md")`)
+
+## Feedback
+
+```{r}
+feedback %>% 
+  mutate_at(vars(key), ~ numeric_order(.) %>% fct_relevel("total")) %>% 
+  ggplot(aes(key, score)) +
+  geom_boxplot() +
+  geom_point(data = feedback %>% filter(number == anon_number), color = "red") +
+  labs(
+    title = str_glue("{code_task} scores"),
+    x = NULL,
+    y = "Score"
+  )
+```
+
+## Feedback and bugs
+
+```{r}
+feedback_bugs %>% 
+  knitr::kable(align = "lllll")
+```
+
+## Notes on task
+
+```{r}
+notes %>% 
+  filter(str_detect(note, str_glue("^{str_to_upper(params$task)}"))) %>% 
+  mutate_at(
+    vars(starts_with("timestamp")), 
+    ~ if_else(!is.na(.), "done", .)
+  ) %>% 
+  replace_na(
+    replace = 
+      list(
+        timestamp_1 = "After you finish this task, please complete [Notes on Task - Part 1](https://forms.gle/7mQiBwWpf6BWUUhS6).",
+        timestamp_2 = "After you understand the solution, please complete [Notes on Task - Part 2](https://forms.gle/2hDCDfyzmddySggs7)."
+      )
+  ) %>% 
+  select(-note) %>% 
+  gather(key = notes, value = status) %>% 
+  mutate(notes = c("Part 1", "Part 2")) %>% 
+  knitr::kable()
+```
+
